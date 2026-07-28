@@ -599,9 +599,9 @@ if TKINTER_AVAILABLE:
             
             # Register log callback
             self.log_manager.register_callback(self._on_log_entry)
-        
-        # Initial log
-        self.log_manager.add_log(LogLevel.INFO, "Debugger initialized")
+            
+            # Initial log
+            self.log_manager.add_log(LogLevel.INFO, "Debugger initialized")
     
     def _setup_event_loop(self):
         """Setup asyncio event loop in a separate thread"""
