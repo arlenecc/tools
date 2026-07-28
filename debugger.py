@@ -1,6 +1,11 @@
 """
 OpenAI API Debugger Tool
 A GUI tool for debugging OpenAI-compatible API endpoints
+
+Usage:
+    python debugger.py              # Launch GUI (requires tkinter)
+    python debugger.py --cli        # Launch CLI mode (no GUI required)
+    python debugger.py --help       # Show help
 """
 import asyncio
 import json
@@ -8,9 +13,20 @@ import time
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Callable
+from collections.abc import AsyncGenerator
 from enum import Enum
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+import argparse
+import sys
+
+# Try to import tkinter, fall back to CLI mode if not available
+try:
+    import tkinter as tk
+    from tkinter import ttk, scrolledtext, messagebox
+    TKINTER_AVAILABLE = True
+except ImportError:
+    TKINTER_AVAILABLE = False
+    print("Note: tkinter not available. GUI mode disabled. Use --cli for command-line mode.")
+
 import threading
 
 
@@ -368,7 +384,7 @@ class APIClient:
     
     async def send_message(self, user_message: str, conversation: ConversationHistory) -> AsyncGenerator[str, None]:
         """Send a message and stream the response"""
-        from parser import ResponseParser
+        parser = ResponseParser()
         
         # Add user message to conversation
         conversation.add_message("user", user_message)
@@ -554,34 +570,35 @@ class APIClient:
 
 
 # ============================================================================
-# GUI Application
+# GUI Application (only defined if tkinter is available)
 # ============================================================================
 
-class OpenAIDebuggerGUI:
-    """Main GUI application for OpenAI API debugging"""
-    
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title("OpenAI API Debugger")
-        self.root.geometry("1200x800")
+if TKINTER_AVAILABLE:
+    class OpenAIDebuggerGUI:
+        """Main GUI application for OpenAI API debugging"""
         
-        # Initialize components
-        self.config = DebuggerConfig()
-        self.conversation = ConversationHistory()
-        self.log_manager = LogManager()
-        self.speed_calculator = TokenSpeedCalculator()
-        self.api_client: Optional[APIClient] = None
-        self.is_generating = False
-        self.event_loop = None
-        
-        # Setup event loop for async operations
-        self._setup_event_loop()
-        
-        # Build UI
-        self._build_ui()
-        
-        # Register log callback
-        self.log_manager.register_callback(self._on_log_entry)
+        def __init__(self, root: tk.Tk):
+            self.root = root
+            self.root.title("OpenAI API Debugger")
+            self.root.geometry("1200x800")
+            
+            # Initialize components
+            self.config = DebuggerConfig()
+            self.conversation = ConversationHistory()
+            self.log_manager = LogManager()
+            self.speed_calculator = TokenSpeedCalculator()
+            self.api_client: Optional[APIClient] = None
+            self.is_generating = False
+            self.event_loop = None
+            
+            # Setup event loop for async operations
+            self._setup_event_loop()
+            
+            # Build UI
+            self._build_ui()
+            
+            # Register log callback
+            self.log_manager.register_callback(self._on_log_entry)
         
         # Initial log
         self.log_manager.add_log(LogLevel.INFO, "Debugger initialized")
@@ -1024,6 +1041,84 @@ class OpenAIDebuggerGUI:
 
 def main():
     """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description="OpenAI API Debugger Tool - Debug OpenAI-compatible API endpoints"
+    )
+    parser.add_argument(
+        "--cli", 
+        action="store_true",
+        help="Run in command-line mode (no GUI)"
+    )
+    parser.add_argument(
+        "--url",
+        type=str,
+        default="http://localhost:8000/v1",
+        help="API Base URL (default: http://localhost:8000/v1)"
+    )
+    parser.add_argument(
+        "--key",
+        type=str,
+        default="",
+        help="API Key"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="gpt-3.5-turbo",
+        help="Model name (default: gpt-3.5-turbo)"
+    )
+    
+    args = parser.parse_args()
+    
+    if args.cli or not TKINTER_AVAILABLE:
+        run_cli_mode(args)
+    else:
+        run_gui_mode()
+
+
+def run_cli_mode(args):
+    """Run the debugger in command-line mode"""
+    print("=" * 60)
+    print("OpenAI API Debugger - CLI Mode")
+    print("=" * 60)
+    print(f"API URL: {args.url}")
+    print(f"Model: {args.model}")
+    print("-" * 60)
+    
+    # Create config
+    config = DebuggerConfig(
+        api_base=args.url,
+        api_key=args.key if args.key else "sk-test-key",
+        model=args.model
+    )
+    
+    # Create client and conversation
+    client = APIClient(config)
+    conversation = ConversationHistory()
+    
+    async def run_test():
+        print("\nSending test request...")
+        
+        try:
+            response_text = ""
+            async for chunk in client.send_message("Say hello in one sentence.", conversation):
+                response_text += chunk
+                print(chunk, end="", flush=True)
+            
+            print("\n\n" + "-" * 60)
+            print("Response received successfully!")
+            return True
+        except Exception as e:
+            print(f"\nError: {e}")
+            return False
+    
+    # Run async test
+    success = asyncio.run(run_test())
+    sys.exit(0 if success else 1)
+
+
+def run_gui_mode():
+    """Run the debugger in GUI mode"""
     root = tk.Tk()
     
     # Set theme
