@@ -1,1 +1,31 @@
-Nothing should be ignored based on the provided file changes. The only modified file is `openai_debug_tool.py`, which appears to be a Python source code file and should not be ignored.
+```
+# Compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Build artifacts
+dist/
+build/
+target/
+```

@@ -348,55 +348,58 @@ class OpenAIDebugToolGUI:
         style = ttk.Style()
         style.theme_use('clam')
         
-        # Create main container
-        main_frame = ttk.Frame(self.root, padding="5")
+        # Create main container with padding
+        main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
+        # === TOP: Configuration Section ===
+        config_frame = ttk.LabelFrame(main_frame, text="Configuration", padding="10")
+        config_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Configure grid weights for responsive layout - make column 1 expandable
+        config_frame.grid_columnconfigure(1, weight=1)
+        
+        # Base URL
+        ttk.Label(config_frame, text="Base URL:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.url_var = tk.StringVar(value=self.saved_config.get("base_url", DEFAULT_BASE_URL))
+        self.url_entry = ttk.Entry(config_frame, textvariable=self.url_var, font=("TkDefaultFont", 10))
+        self.url_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        
+        # API Key
+        ttk.Label(config_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        self.api_key_var = tk.StringVar(value=self.saved_config.get("api_key", ""))
+        self.api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, show="*", font=("TkDefaultFont", 10))
+        self.api_key_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
+        
+        # Model
+        ttk.Label(config_frame, text="Model:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        self.model_var = tk.StringVar(value=self.saved_config.get("model", DEFAULT_MODEL))
+        self.model_entry = ttk.Entry(config_frame, textvariable=self.model_var, font=("TkDefaultFont", 10))
+        self.model_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
+        
+        # Save config button
+        save_btn = ttk.Button(config_frame, text="Save Config", command=self.save_configuration)
+        save_btn.grid(row=3, column=1, sticky=tk.E, padx=5, pady=5)
+        
+        # === MIDDLE: Chat and Logs (side by side) ===
         # Create paned window for resizable sections
         paned = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True)
         
         # Left panel - Chat interface
         left_frame = ttk.Frame(paned, padding="5")
-        paned.add(left_frame, weight=3)
+        paned.add(left_frame, weight=2)
         
-        # Right panel - Logs and info
+        # Right panel - Logs
         right_frame = ttk.Frame(paned, padding="5")
-        paned.add(right_frame, weight=2)
+        paned.add(right_frame, weight=1)
         
-        # === LEFT PANEL ===
-        
-        # Configuration section
-        config_frame = ttk.LabelFrame(left_frame, text="Configuration", padding="5")
-        config_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        # Base URL
-        ttk.Label(config_frame, text="Base URL:").grid(row=0, column=0, sticky=tk.W, padx=2)
-        self.url_var = tk.StringVar(value=self.saved_config.get("base_url", DEFAULT_BASE_URL))
-        url_entry = ttk.Entry(config_frame, textvariable=self.url_var, width=50)
-        url_entry.grid(row=0, column=1, padx=2, pady=2, sticky=tk.EW)
-        
-        # API Key
-        ttk.Label(config_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, padx=2)
-        self.api_key_var = tk.StringVar(value=self.saved_config.get("api_key", ""))
-        api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, width=50, show="*")
-        api_key_entry.grid(row=1, column=1, padx=2, pady=2, sticky=tk.EW)
-        
-        # Model
-        ttk.Label(config_frame, text="Model:").grid(row=2, column=0, sticky=tk.W, padx=2)
-        self.model_var = tk.StringVar(value=self.saved_config.get("model", DEFAULT_MODEL))
-        model_entry = ttk.Entry(config_frame, textvariable=self.model_var, width=50)
-        model_entry.grid(row=2, column=1, padx=2, pady=2, sticky=tk.EW)
-        
-        # Save config button
-        save_btn = ttk.Button(config_frame, text="Save Config", command=self.save_configuration)
-        save_btn.grid(row=3, column=1, sticky=tk.E, padx=2, pady=2)
-        
+        # === LEFT PANEL: Chat ===
         # Chat display
         chat_frame = ttk.LabelFrame(left_frame, text="Conversation", padding="5")
-        chat_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        chat_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.chat_display = scrolledtext.ScrolledText(chat_frame, wrap=tk.WORD, state=tk.DISABLED)
+        self.chat_display = scrolledtext.ScrolledText(chat_frame, wrap=tk.WORD, state=tk.DISABLED, font=("TkDefaultFont", 10))
         self.chat_display.pack(fill=tk.BOTH, expand=True)
         
         # Configure tags for different message types
@@ -407,46 +410,48 @@ class OpenAIDebugToolGUI:
         
         # Input section
         input_frame = ttk.Frame(left_frame)
-        input_frame.pack(fill=tk.X, pady=(5, 0))
+        input_frame.pack(fill=tk.X, pady=(10, 0))
         
-        # Create a proper frame for the text input
-        text_input_frame = ttk.Frame(input_frame)
-        text_input_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # Input text area with explicit width and proper packing
+        ttk.Label(input_frame, text="Message:").pack(anchor=tk.W)
+        self.input_text = scrolledtext.ScrolledText(
+            input_frame, 
+            height=5, 
+            wrap=tk.WORD, 
+            font=("TkDefaultFont", 10),
+            width=50  # Explicit width
+        )
+        self.input_text.pack(fill=tk.X, expand=True, pady=(5, 5))
         
-        self.input_text = scrolledtext.ScrolledText(text_input_frame, height=4, wrap=tk.WORD, font=("TkDefaultFont", 10))
-        self.input_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        # Button row
+        button_frame = ttk.Frame(input_frame)
+        button_frame.pack(fill=tk.X, side=tk.BOTTOM)
         
-        # Button frame - pack at the bottom of the input area
-        button_container = ttk.Frame(input_frame)
-        button_container.pack(side=tk.RIGHT, fill=tk.Y)
+        self.send_btn = ttk.Button(button_frame, text="Send (Enter)", command=self.send_message, width=15)
+        self.send_btn.pack(side=tk.LEFT, padx=(0, 5))
         
-        self.send_btn = ttk.Button(button_container, text="Send", command=self.send_message, width=10)
-        self.send_btn.pack(pady=2)
-        
-        self.clear_btn = ttk.Button(button_container, text="Clear", command=self.clear_conversation, width=10)
-        self.clear_btn.pack(pady=2)
-        
-        self.stop_btn = ttk.Button(button_container, text="Stop", command=self.stop_generation, width=10)
-        self.stop_btn.pack(pady=2)
+        self.stop_btn = ttk.Button(button_frame, text="Stop", command=self.stop_generation, width=10)
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 5))
         self.stop_btn.state(['disabled'])
+        
+        self.clear_btn = ttk.Button(button_frame, text="Clear Chat", command=self.clear_conversation, width=12)
+        self.clear_btn.pack(side=tk.LEFT)
         
         # Status bar
         status_frame = ttk.Frame(left_frame)
         status_frame.pack(fill=tk.X, pady=(5, 0))
         
-        self.speed_label = ttk.Label(status_frame, text="Speed: 0.00 tokens/s")
-        self.speed_label.pack(side=tk.LEFT)
+        self.speed_label = ttk.Label(status_frame, text="Speed: 0.00 tokens/s", relief=tk.SUNKEN, anchor=tk.W)
+        self.speed_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
-        self.token_label = ttk.Label(status_frame, text="Tokens: 0")
-        self.token_label.pack(side=tk.RIGHT)
+        self.token_label = ttk.Label(status_frame, text="Tokens: 0", relief=tk.SUNKEN, anchor=tk.E)
+        self.token_label.pack(side=tk.RIGHT, padx=(5, 0))
         
-        # === RIGHT PANEL ===
-        
-        # Log section
+        # === RIGHT PANEL: Logs ===
         log_frame = ttk.LabelFrame(right_frame, text="API Communication Log", padding="5")
         log_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.log_display = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, state=tk.DISABLED, height=25)
+        self.log_display = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, state=tk.DISABLED, font=("TkDefaultFont", 9))
         self.log_display.pack(fill=tk.BOTH, expand=True)
         
         # Log tags
@@ -465,23 +470,33 @@ class OpenAIDebugToolGUI:
         export_log_btn = ttk.Button(log_control_frame, text="Export Log", command=self.export_log)
         export_log_btn.pack(side=tk.RIGHT)
         
-        # Bind Enter key to send (Control+Enter or Command+Enter on Mac)
-        self.input_text.bind("<Control-Return>", lambda e: self.send_message())
-        self.input_text.bind("<Command-Return>", lambda e: self.send_message())
-        
-        # Also bind regular Return key when not in multiline editing mode
-        # Use Shift+Enter for new line, Enter alone to send
-        self.input_text.bind("<Shift-Return>", lambda e: None)  # Allow shift+enter for newline
+        # Bind Enter key to send
+        # Shift+Enter for newline, Enter alone to send
         self.input_text.bind("<Return>", self._on_enter_key)
+        self.input_text.bind("<Shift-Return>", self._on_shift_enter)
+        self.input_text.bind("<Control-Return>", lambda e: self.send_message())
+        # Mac Command+Enter support
+        try:
+            self.input_text.bind("<Command-Return>", lambda e: self.send_message())
+        except:
+            pass  # Command binding may not be available on all platforms
         
         # Protocol handler
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
+    def _on_shift_enter(self, event):
+        """Handle Shift+Enter - allow newline"""
+        return None  # Allow default behavior (newline)
+    
     def _on_enter_key(self, event):
         """Handle Enter key press - send message unless Shift is held"""
-        # Check if Shift is pressed (for multiline input)
-        if event.state & 0x1:  # Shift key is pressed
-            return None  # Allow default behavior (newline)
+        # Check if Shift is pressed using the state flags
+        # 0x1 = Shift, 0x4 = Control, 0x8 = Alt/Meta
+        shift_pressed = bool(event.state & 0x1)
+        control_pressed = bool(event.state & 0x4)
+        
+        if shift_pressed or control_pressed:
+            return None  # Allow default behavior (newline for Shift, nothing special for Control)
         else:
             self.send_message()
             return "break"  # Prevent default newline
