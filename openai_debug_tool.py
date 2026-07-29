@@ -407,10 +407,10 @@ class OpenAIDebugToolGUI:
         self.api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, show="*", font=("TkDefaultFont", 10))
         self.api_key_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
         
-        # Model - now using Combobox for model selection
+        # Model - now using Combobox for model selection (editable for better UX)
         ttk.Label(config_frame, text="Model:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
         self.model_var = tk.StringVar(value=self.saved_config.get("model", DEFAULT_MODEL))
-        self.model_combo = ttk.Combobox(config_frame, textvariable=self.model_var, font=("TkDefaultFont", 10), state="readonly")
+        self.model_combo = ttk.Combobox(config_frame, textvariable=self.model_var, font=("TkDefaultFont", 10), state="normal")
         self.model_combo.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
         
         # Get Models button
