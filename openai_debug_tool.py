@@ -407,22 +407,26 @@ class OpenAIDebugToolGUI:
         
         # Input section
         input_frame = ttk.Frame(left_frame)
-        input_frame.pack(fill=tk.X)
+        input_frame.pack(fill=tk.X, pady=(5, 0))
         
-        self.input_text = scrolledtext.ScrolledText(input_frame, height=4, wrap=tk.WORD)
-        self.input_text.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        # Create a proper frame for the text input
+        text_input_frame = ttk.Frame(input_frame)
+        text_input_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Buttons
-        button_frame = ttk.Frame(input_frame)
-        button_frame.pack(side=tk.RIGHT)
+        self.input_text = scrolledtext.ScrolledText(text_input_frame, height=4, wrap=tk.WORD, font=("TkDefaultFont", 10))
+        self.input_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
-        self.send_btn = ttk.Button(button_frame, text="Send", command=self.send_message)
+        # Button frame - pack at the bottom of the input area
+        button_container = ttk.Frame(input_frame)
+        button_container.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.send_btn = ttk.Button(button_container, text="Send", command=self.send_message, width=10)
         self.send_btn.pack(pady=2)
         
-        self.clear_btn = ttk.Button(button_frame, text="Clear", command=self.clear_conversation)
+        self.clear_btn = ttk.Button(button_container, text="Clear", command=self.clear_conversation, width=10)
         self.clear_btn.pack(pady=2)
         
-        self.stop_btn = ttk.Button(button_frame, text="Stop", command=self.stop_generation)
+        self.stop_btn = ttk.Button(button_container, text="Stop", command=self.stop_generation, width=10)
         self.stop_btn.pack(pady=2)
         self.stop_btn.state(['disabled'])
         
@@ -442,7 +446,7 @@ class OpenAIDebugToolGUI:
         log_frame = ttk.LabelFrame(right_frame, text="API Communication Log", padding="5")
         log_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.log_display = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, state=tk.DISABLED, height=20)
+        self.log_display = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, state=tk.DISABLED, height=25)
         self.log_display.pack(fill=tk.BOTH, expand=True)
         
         # Log tags
@@ -461,18 +465,26 @@ class OpenAIDebugToolGUI:
         export_log_btn = ttk.Button(log_control_frame, text="Export Log", command=self.export_log)
         export_log_btn.pack(side=tk.RIGHT)
         
-        # Request/Response details
-        details_frame = ttk.LabelFrame(right_frame, text="Details", padding="5")
-        details_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
-        
-        self.details_display = scrolledtext.ScrolledText(details_frame, wrap=tk.WORD, state=tk.DISABLED)
-        self.details_display.pack(fill=tk.BOTH, expand=True)
-        
-        # Bind Enter key to send
+        # Bind Enter key to send (Control+Enter or Command+Enter on Mac)
         self.input_text.bind("<Control-Return>", lambda e: self.send_message())
+        self.input_text.bind("<Command-Return>", lambda e: self.send_message())
+        
+        # Also bind regular Return key when not in multiline editing mode
+        # Use Shift+Enter for new line, Enter alone to send
+        self.input_text.bind("<Shift-Return>", lambda e: None)  # Allow shift+enter for newline
+        self.input_text.bind("<Return>", self._on_enter_key)
         
         # Protocol handler
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def _on_enter_key(self, event):
+        """Handle Enter key press - send message unless Shift is held"""
+        # Check if Shift is pressed (for multiline input)
+        if event.state & 0x1:  # Shift key is pressed
+            return None  # Allow default behavior (newline)
+        else:
+            self.send_message()
+            return "break"  # Prevent default newline
     
     def save_configuration(self):
         """Save current configuration"""
