@@ -399,13 +399,13 @@ class OpenAIDebugToolGUI:
         ttk.Label(config_frame, text="Base URL:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.url_var = tk.StringVar(value=self.saved_config.get("base_url", DEFAULT_BASE_URL))
         self.url_entry = ttk.Entry(config_frame, textvariable=self.url_var, font=("TkDefaultFont", 10))
-        self.url_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.url_entry.grid(row=0, column=1, columnspan=2, padx=5, pady=5, sticky=tk.EW)
         
         # API Key
         ttk.Label(config_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.api_key_var = tk.StringVar(value=self.saved_config.get("api_key", ""))
         self.api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, show="*", font=("TkDefaultFont", 10))
-        self.api_key_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.api_key_entry.grid(row=1, column=1, columnspan=2, padx=5, pady=5, sticky=tk.EW)
         
         # Model - now using Combobox for model selection (editable for better UX)
         ttk.Label(config_frame, text="Model:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
@@ -415,7 +415,7 @@ class OpenAIDebugToolGUI:
         
         # Get Models button
         get_models_btn = ttk.Button(config_frame, text="Get Models", command=self.get_models)
-        get_models_btn.grid(row=2, column=2, padx=5, pady=5)
+        get_models_btn.grid(row=2, column=2, padx=5, pady=5, sticky=tk.W)
         
         # Save config button
         save_btn = ttk.Button(config_frame, text="Save Config", command=self.save_configuration)
