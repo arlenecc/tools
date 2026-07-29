@@ -42,6 +42,16 @@ Or directly:
 python src/main.py
 ```
 
+**Note for headless environments (e.g., Docker, WSL without display):**
+
+Set the Qt platform to offscreen mode:
+
+```bash
+QT_QPA_PLATFORM=offscreen python run.py
+```
+
+This allows the application to run without a physical display, useful for testing or remote servers.
+
 ## Project Structure
 
 ```

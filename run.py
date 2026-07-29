@@ -11,14 +11,15 @@ Features:
 - Persistent configuration storage
 
 Usage:
-    python src/main.py
+    python run.py
 """
 
 import sys
 import os
 
 # Ensure src directory is in path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
+sys.path.insert(0, src_path)
 
 from main import main
 
