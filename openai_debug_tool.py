@@ -522,6 +522,8 @@ class OpenAIDebugToolGUI:
     
     def add_log_entry(self, entry: LogEntry):
         """Add entry to log display"""
+        import tkinter as tk
+        
         self.log_entries.append(entry)
         
         self.log_display.configure(state=tk.NORMAL)
@@ -540,6 +542,8 @@ class OpenAIDebugToolGUI:
     
     def add_chat_message(self, role: str, content: str):
         """Add message to chat display"""
+        import tkinter as tk
+        
         self.chat_display.configure(state=tk.NORMAL)
         timestamp = datetime.now().strftime("%H:%M:%S")
         
@@ -551,6 +555,8 @@ class OpenAIDebugToolGUI:
     
     def add_error_message(self, error: str):
         """Add error message to chat"""
+        import tkinter as tk
+        
         self.chat_display.configure(state=tk.NORMAL)
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.chat_display.insert(tk.END, f"[{timestamp}] Error: {error}\n\n", "error")
@@ -559,6 +565,8 @@ class OpenAIDebugToolGUI:
     
     def clear_conversation(self):
         """Clear conversation history"""
+        import tkinter as tk
+        
         self.conversation_manager.clear()
         self.chat_display.configure(state=tk.NORMAL)
         self.chat_display.delete(1.0, tk.END)
@@ -568,6 +576,8 @@ class OpenAIDebugToolGUI:
     
     def clear_log(self):
         """Clear log display"""
+        import tkinter as tk
+        
         self.log_entries = []
         self.log_display.configure(state=tk.NORMAL)
         self.log_display.delete(1.0, tk.END)
@@ -602,6 +612,8 @@ class OpenAIDebugToolGUI:
     
     async def send_message_async(self):
         """Async message sending logic"""
+        import tkinter as tk
+        
         try:
             user_input = self.input_text.get(1.0, tk.END).strip()
             if not user_input:
