@@ -193,6 +193,32 @@ class OpenAIClient:
             raise APIError(f"HTTP Error: {e.response.status_code}", e.response.status_code)
         except Exception as e:
             raise APIError(f"Stream failed: {str(e)}")
+    
+    async def list_models(self) -> List[str]:
+        """List available models from the API"""
+        if not self._client:
+            raise APIError("Client not initialized. Use async context manager.")
+        
+        url = self._get_endpoint_url("/models")
+        
+        try:
+            response = await self._client.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            models = []
+            if "data" in data:
+                for model_info in data["data"]:
+                    model_id = model_info.get("id", "")
+                    if model_id:
+                        models.append(model_id)
+            
+            return models
+            
+        except httpx.HTTPStatusError as e:
+            raise APIError(f"HTTP Error: {e.response.status_code}", e.response.status_code)
+        except Exception as e:
+            raise APIError(f"Failed to list models: {str(e)}")
 
 
 class ConversationManager:
@@ -367,6 +393,7 @@ class OpenAIDebugToolGUI:
         
         # Configure grid weights for responsive layout - make column 1 expandable
         config_frame.grid_columnconfigure(1, weight=1)
+        config_frame.grid_columnconfigure(2, weight=0)  # Button column doesn't expand
         
         # Base URL
         ttk.Label(config_frame, text="Base URL:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
@@ -380,11 +407,15 @@ class OpenAIDebugToolGUI:
         self.api_key_entry = ttk.Entry(config_frame, textvariable=self.api_key_var, show="*", font=("TkDefaultFont", 10))
         self.api_key_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.EW)
         
-        # Model
+        # Model - now using Combobox for model selection
         ttk.Label(config_frame, text="Model:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
         self.model_var = tk.StringVar(value=self.saved_config.get("model", DEFAULT_MODEL))
-        self.model_entry = ttk.Entry(config_frame, textvariable=self.model_var, font=("TkDefaultFont", 10))
-        self.model_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
+        self.model_combo = ttk.Combobox(config_frame, textvariable=self.model_var, font=("TkDefaultFont", 10), state="readonly")
+        self.model_combo.grid(row=2, column=1, padx=5, pady=5, sticky=tk.EW)
+        
+        # Get Models button
+        get_models_btn = ttk.Button(config_frame, text="Get Models", command=self.get_models)
+        get_models_btn.grid(row=2, column=2, padx=5, pady=5)
         
         # Save config button
         save_btn = ttk.Button(config_frame, text="Save Config", command=self.save_configuration)
@@ -519,6 +550,91 @@ class OpenAIDebugToolGUI:
         }
         self.config_manager.save_config(config)
         self.add_log_entry(LogEntry.create_debug_log("Configuration saved"))
+    
+    async def get_models_async(self) -> List[str]:
+        """Async method to fetch models from API"""
+        import tkinter as tk
+        
+        base_url = self.url_var.get().strip()
+        api_key = self.api_key_var.get().strip()
+        
+        if not base_url:
+            self.add_error_message("Base URL is required")
+            self.add_log_entry(LogEntry.create_error_log("Cannot fetch models: Base URL is empty"))
+            return []
+        
+        self.add_log_entry(LogEntry.create_debug_log(f"Fetching models from: {base_url}"))
+        
+        try:
+            async with OpenAIClient(base_url, api_key, "") as client:
+                # Log request
+                self.add_log_entry(LogEntry.create_request_log(
+                    url=f"{base_url}/models",
+                    method="GET",
+                    headers={"Authorization": "Bearer ***" if api_key else "", "Content-Type": "application/json"},
+                    body={}
+                ))
+                
+                models = await client.list_models()
+                
+                # Log response
+                self.add_log_entry(LogEntry.create_response_log(
+                    status_code=200,
+                    body={"models": models, "count": len(models)}
+                ))
+                
+                self.add_log_entry(LogEntry.create_debug_log(f"Found {len(models)} models"))
+                
+                return models
+                
+        except APIError as e:
+            self.add_log_entry(LogEntry.create_error_log(f"API Error fetching models: {str(e)} (status: {e.status_code})"))
+            self.add_error_message(f"Failed to fetch models: {str(e)}")
+            return []
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            self.add_log_entry(LogEntry.create_error_log(f"Exception fetching models: {str(e)}\n{error_trace}"))
+            self.add_error_message(f"Unexpected error: {str(e)}")
+            return []
+    
+    def get_models(self):
+        """Fetch available models from API and populate dropdown"""
+        import tkinter as tk
+        
+        # Disable button during fetch
+        for widget in self.root.winfo_children():
+            if isinstance(widget, ttk.Frame):
+                for child in widget.winfo_children():
+                    if isinstance(child, ttk.LabelFrame):
+                        for grandchild in child.winfo_children():
+                            if isinstance(grandchild, ttk.Button) and grandchild.cget("text") == "Get Models":
+                                grandchild.state(['disabled'])
+        
+        def run_async():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            models = loop.run_until_complete(self.get_models_async())
+            loop.close()
+            
+            # Update UI in main thread
+            if models:
+                self.root.after(0, lambda: self.model_combo.configure(values=models))
+            
+            # Re-enable button
+            def enable_button():
+                for widget in self.root.winfo_children():
+                    if isinstance(widget, ttk.Frame):
+                        for child in widget.winfo_children():
+                            if isinstance(child, ttk.LabelFrame):
+                                for grandchild in child.winfo_children():
+                                    if isinstance(grandchild, ttk.Button) and grandchild.cget("text") == "Get Models":
+                                        grandchild.state(['!disabled'])
+            
+            self.root.after(0, enable_button)
+        
+        thread = threading.Thread(target=run_async, daemon=True)
+        thread.start()
     
     def add_log_entry(self, entry: LogEntry):
         """Add entry to log display"""

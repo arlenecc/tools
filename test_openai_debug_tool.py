@@ -36,6 +36,46 @@ class TestOpenAIClient:
         assert client.model == "gpt-3.5-turbo"
     
     @pytest.mark.asyncio
+    async def test_list_models(self):
+        """Test listing available models"""
+        from openai_debug_tool import OpenAIClient, APIError
+        
+        client = OpenAIClient(
+            base_url="http://test-server",
+            api_key="test-key",
+            model="test-model"
+        )
+        
+        # Mock response
+        mock_response = Mock()
+        mock_response.raise_for_status = Mock()
+        mock_response.json = Mock(return_value={
+            "data": [
+                {"id": "gpt-3.5-turbo"},
+                {"id": "gpt-4"},
+                {"id": "claude-3"}
+            ]
+        })
+        
+        # Create a proper async mock for the httpx client
+        mock_http_client = AsyncMock()
+        mock_http_client.get = AsyncMock(return_value=mock_response)
+        mock_http_client.aclose = AsyncMock()
+        
+        # Set _client directly (bypass __aenter__ which tries to create real httpx client)
+        client._client = mock_http_client
+        
+        models = await client.list_models()
+        
+        assert len(models) == 3
+        assert "gpt-3.5-turbo" in models
+        assert "gpt-4" in models
+        assert "claude-3" in models
+        
+        # Verify the get method was called with correct URL
+        mock_http_client.get.assert_called_once_with("http://test-server/models")
+    
+    @pytest.mark.asyncio
     async def test_chat_completion_streaming(self):
         """Test streaming chat completion"""
         from openai_debug_tool import OpenAIClient
