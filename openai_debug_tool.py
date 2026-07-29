@@ -78,6 +78,15 @@ class LogEntry:
             message=message,
             details=details
         )
+    
+    @classmethod
+    def create_warning_log(cls, message: str, details: Optional[Dict] = None) -> 'LogEntry':
+        return cls(
+            timestamp=datetime.now(),
+            level=LogLevel.WARNING,
+            message=message,
+            details=details
+        )
 
 
 # ============================================================================
@@ -593,93 +602,131 @@ class OpenAIDebugToolGUI:
     
     async def send_message_async(self):
         """Async message sending logic"""
-        user_input = self.input_text.get(1.0, tk.END).strip()
-        if not user_input:
-            return
-        
-        # Clear input
-        self.input_text.delete(1.0, tk.END)
-        
-        # Add user message to conversation
-        self.conversation_manager.add_message("user", user_input)
-        self.add_chat_message("user", user_input)
-        
-        # Update token count
-        total_tokens = count_tokens_messages(self.conversation_manager.get_messages())
-        self.token_label.configure(text=f"Tokens: {total_tokens}")
-        
-        # Prepare client
-        base_url = self.url_var.get()
-        api_key = self.api_key_var.get()
-        model = self.model_var.get()
-        
-        self.is_streaming = True
-        self.send_btn.state(['disabled'])
-        self.stop_btn.state(['!disabled'])
-        
-        assistant_content = ""
-        self.speed_calculator.reset()
-        self.speed_calculator.start()
-        
         try:
+            user_input = self.input_text.get(1.0, tk.END).strip()
+            if not user_input:
+                self.add_log_entry(LogEntry.create_debug_log("No input provided"))
+                return
+            
+            self.add_log_entry(LogEntry.create_debug_log(f"Sending message: {user_input[:100]}..."))
+            
+            # Clear input
+            self.input_text.delete(1.0, tk.END)
+            
+            # Add user message to conversation
+            self.conversation_manager.add_message("user", user_input)
+            self.add_chat_message("user", user_input)
+            
+            # Update token count
+            total_tokens = count_tokens_messages(self.conversation_manager.get_messages())
+            self.token_label.configure(text=f"Tokens: {total_tokens}")
+            
+            # Prepare client
+            base_url = self.url_var.get().strip()
+            api_key = self.api_key_var.get().strip()
+            model = self.model_var.get().strip()
+            
+            if not base_url:
+                self.add_error_message("Base URL is required")
+                self.add_log_entry(LogEntry.create_error_log("Base URL is empty"))
+                return
+            
+            if not model:
+                self.add_error_message("Model name is required")
+                self.add_log_entry(LogEntry.create_error_log("Model name is empty"))
+                return
+            
+            self.add_log_entry(LogEntry.create_debug_log(
+                f"Connecting to: {base_url}", 
+                {"model": model, "api_key_set": bool(api_key)}
+            ))
+            
+            self.is_streaming = True
+            self.send_btn.state(['disabled'])
+            self.stop_btn.state(['!disabled'])
+            
+            assistant_content = ""
+            self.speed_calculator.reset()
+            self.speed_calculator.start()
+            
             async with OpenAIClient(base_url, api_key, model) as client:
                 messages = self.conversation_manager.get_messages()
                 
-                # Log request
+                # Log request with full details
+                request_body = {"model": model, "messages": messages, "stream": True}
                 self.add_log_entry(LogEntry.create_request_log(
                     url=f"{base_url}/chat/completions",
                     method="POST",
-                    headers={"Authorization": "Bearer ***", "Content-Type": "application/json"},
-                    body={"model": model, "messages": messages, "stream": True}
+                    headers={"Authorization": "Bearer ***" if api_key else "", "Content-Type": "application/json"},
+                    body=request_body
                 ))
+                
+                self.add_log_entry(LogEntry.create_debug_log("Starting stream request..."))
                 
                 # Stream response
                 response_text = ""
                 token_count = 0
                 
-                async for chunk in client.chat_completion_stream(messages):
-                    if not self.is_streaming:
-                        break
+                try:
+                    async for chunk in client.chat_completion_stream(messages):
+                        if not self.is_streaming:
+                            self.add_log_entry(LogEntry.create_debug_log("Streaming stopped by user"))
+                            break
+                        
+                        response_text += chunk
+                        token_count += 1
+                        self.speed_calculator.add_token()
+                        
+                        # Update display incrementally
+                        if token_count == 1:
+                            self.add_chat_message("assistant", chunk)
+                        else:
+                            # Append to last message
+                            self.chat_display.configure(state=tk.NORMAL)
+                            self.chat_display.insert(tk.END, chunk)
+                            self.chat_display.see(tk.END)
+                            self.chat_display.configure(state=tk.DISABLED)
+                        
+                        # Update speed periodically
+                        if token_count % 5 == 0:
+                            speed = self.speed_calculator.get_speed()
+                            self.update_speed_display(speed)
                     
-                    response_text += chunk
-                    token_count += 1
-                    self.speed_calculator.add_token()
+                    self.speed_calculator.stop()
+                    final_speed = self.speed_calculator.get_speed()
+                    self.update_speed_display(final_speed)
                     
-                    # Update display incrementally
-                    if token_count == 1:
-                        self.add_chat_message("assistant", chunk)
+                    if response_text:
+                        self.conversation_manager.add_message("assistant", response_text)
+                        
+                        # Log response
+                        self.add_log_entry(LogEntry.create_response_log(
+                            status_code=200,
+                            body={"content": response_text[:500] + "..." if len(response_text) > 500 else response_text, "tokens": token_count}
+                        ))
+                        
+                        self.add_log_entry(LogEntry.create_debug_log(
+                            f"Response complete: {token_count} tokens at {final_speed:.2f} tokens/s"
+                        ))
+                        
+                        # Update final token count
+                        total_tokens = count_tokens_messages(self.conversation_manager.get_messages())
+                        self.token_label.configure(text=f"Tokens: {total_tokens}")
                     else:
-                        # Append to last message
-                        self.chat_display.configure(state=tk.NORMAL)
-                        self.chat_display.insert(tk.END, chunk)
-                        self.chat_display.see(tk.END)
-                        self.chat_display.configure(state=tk.DISABLED)
-                    
-                    # Update speed
-                    speed = self.speed_calculator.get_speed()
-                    self.update_speed_display(speed)
-                
-                self.speed_calculator.stop()
-                
-                if response_text:
-                    self.conversation_manager.add_message("assistant", response_text)
-                    
-                    # Log response
-                    self.add_log_entry(LogEntry.create_response_log(
-                        status_code=200,
-                        body={"content": response_text[:500] + "..." if len(response_text) > 500 else response_text}
-                    ))
-                    
-                    # Update final token count
-                    total_tokens = count_tokens_messages(self.conversation_manager.get_messages())
-                    self.token_label.configure(text=f"Tokens: {total_tokens}")
+                        self.add_log_entry(LogEntry.create_warning_log("Empty response received"))
+                        
+                except Exception as stream_error:
+                    self.add_log_entry(LogEntry.create_error_log(f"Stream error: {str(stream_error)}"))
+                    raise
                     
         except APIError as e:
             self.add_error_message(str(e))
-            self.add_log_entry(LogEntry.create_error_log(str(e)))
+            self.add_log_entry(LogEntry.create_error_log(f"API Error: {str(e)} (status: {e.status_code})"))
         except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
             self.add_error_message(f"Unexpected error: {str(e)}")
-            self.add_log_entry(LogEntry.create_error_log(str(e)))
+            self.add_log_entry(LogEntry.create_error_log(f"Exception: {str(e)}\n{error_trace}"))
         finally:
             self.is_streaming = False
             self.send_btn.state(['!disabled'])
