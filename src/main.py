@@ -76,44 +76,43 @@ class MainWindow(QMainWindow):
         self.logger.register_callback(self._on_log_entry)
 
     def _init_ui(self):
-        """初始化 UI - 新布局：左侧配置 (1/3)，右侧上部对话，右侧下部日志"""
+        """初始化 UI - 新布局：顶部配置 (1/5)，左侧对话 (2/3)，右侧日志 (1/3)"""
         self.setWindowTitle("OpenAI API 调试工具")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1400, 900)
 
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
-        main_layout.setSpacing(10)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout = QVBoxLayout(central)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(8, 8, 8, 8)
 
-        # 左侧配置面板 (约 1/3 宽度)
+        # 顶部配置面板 (约 1/5 高度，横向占满)
         config_group = self._create_config_panel()
-        config_group.setMinimumWidth(300)
-        config_group.setMaximumWidth(450)
-        main_layout.addWidget(config_group, 1)
+        config_group.setMaximumHeight(180)
+        main_layout.addWidget(config_group, 0)
 
-        # 右侧区域 (垂直布局：上部对话 + 下部日志)
-        right_splitter = QSplitter(Qt.Orientation.Vertical)
-        right_splitter.setStretchFactor(0, 3)  # 对话区域占 3/4
-        right_splitter.setStretchFactor(1, 1)  # 日志区域占 1/4
-        main_layout.addWidget(right_splitter, 3)
+        # 下部区域 (水平分割：左侧对话 + 右侧日志)
+        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
+        bottom_splitter.setStretchFactor(0, 2)  # 对话区域占 2/3
+        bottom_splitter.setStretchFactor(1, 1)  # 日志区域占 1/3
+        main_layout.addWidget(bottom_splitter, 1)
 
-        # 对话区域
+        # 左侧对话区域
         chat_widget = self._create_chat_area()
-        right_splitter.addWidget(chat_widget)
+        bottom_splitter.addWidget(chat_widget)
 
-        # 日志区域
+        # 右侧日志区域
         log_widget = self._create_log_area()
-        right_splitter.addWidget(log_widget)
+        bottom_splitter.addWidget(log_widget)
 
         # 设置初始比例
-        QTimer.singleShot(100, lambda: self._set_splitter_sizes(right_splitter))
+        QTimer.singleShot(100, lambda: self._set_splitter_sizes(bottom_splitter))
 
     def _set_splitter_sizes(self, splitter: QSplitter):
         """设置分割器初始大小"""
-        total_height = splitter.height()
-        if total_height > 0:
-            splitter.setSizes([int(total_height * 0.75), int(total_height * 0.25)])
+        total_width = splitter.width()
+        if total_width > 0:
+            splitter.setSizes([int(total_width * 0.67), int(total_width * 0.33)])
 
     def _create_config_panel(self) -> QGroupBox:
         group = QGroupBox("服务配置")
@@ -153,12 +152,12 @@ class MainWindow(QMainWindow):
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
         self.chat_display.setFont(QFont("Consolas", 10))
-        # 设置对话区域背景为白色，确保文字清晰可见
+        # 设置对话区域背景为深灰色，与输入框一致
         self.chat_display.setStyleSheet("""
             QTextEdit { 
-                background-color: #ffffff; 
-                color: #000000;
-                border: 1px solid #cccccc;
+                background-color: #2b2b2b; 
+                color: #ffffff;
+                border: 1px solid #555555;
                 padding: 5px;
             }
         """)
@@ -178,6 +177,14 @@ class MainWindow(QMainWindow):
         self.input_field = QTextEdit()
         self.input_field.setMaximumHeight(100)
         self.input_field.setPlaceholderText("输入消息... (Ctrl+Enter 发送)")
+        self.input_field.setStyleSheet("""
+            QTextEdit { 
+                background-color: #2b2b2b; 
+                color: #ffffff;
+                border: 1px solid #555555;
+                padding: 5px;
+            }
+        """)
         self.input_field.installEventFilter(self)
         input_layout.addWidget(self.input_field, 1)
 
@@ -199,12 +206,12 @@ class MainWindow(QMainWindow):
         self.log_display = QTextEdit()
         self.log_display.setReadOnly(True)
         self.log_display.setFont(QFont("Consolas", 9))
-        # 设置日志区域背景色为浅灰色，文字为深色，便于区分和阅读
+        # 设置日志区域背景色为深灰色，与整体主题一致
         self.log_display.setStyleSheet("""
             QTextEdit { 
-                background-color: #f0f0f0; 
-                color: #222222;
-                border: 1px solid #cccccc;
+                background-color: #2b2b2b; 
+                color: #ffffff;
+                border: 1px solid #555555;
                 padding: 5px;
             }
         """)
