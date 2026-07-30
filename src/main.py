@@ -326,10 +326,23 @@ class MainWindow(QMainWindow):
             # 如果是第一条 assistant 消息，添加到历史
             self.history.add_assistant_message(self._current_assistant_block, self.config.model)
         
-        # 刷新对话显示 - 清空并重新渲染所有消息
-        self.chat_display.clear()
-        for msg in self.history.get_messages():
-            self._append_chat(msg.role, msg.content)
+        # 直接追加到对话显示，避免清空重绘导致的闪烁和性能问题
+        cursor = self.chat_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        
+        # 如果是第一条 token，需要先添加角色标签
+        if len(self._current_assistant_block) == len(text):
+            # 这是第一条 token，需要插入角色标签
+            cursor.insertHtml(f'<div style="background-color:#3a3a3a;padding:8px;margin:5px 0;border-radius:5px;"><span style="color:#4CAF50;font-weight:bold;">AI:</span> <span style="color:#e0e0e0;">{text}</span></div>')
+        else:
+            # 后续 token 直接追加到最后一个 div 内
+            # 移动光标到最后一个 div 的末尾前
+            cursor.setPosition(cursor.position() - 11)  # 跳过 "</div>"
+            cursor.insertText(text)
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+        
+        self.chat_display.setTextCursor(cursor)
+        self.chat_display.ensureCursorVisible()
         
         # 更新状态栏显示思考过程（最后 50 个字符）
         preview = self._current_assistant_block[-50:] if len(self._current_assistant_block) > 50 else self._current_assistant_block
