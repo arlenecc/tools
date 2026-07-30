@@ -151,12 +151,12 @@ class MainWindow(QMainWindow):
         # 消息显示区
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
-        self.chat_display.setFont(QFont("Consolas", 10))
+        self.chat_display.setFont(QFont("Consolas", 14))  # 字体加大到 14pt
         # 设置对话区域背景为深灰色，与输入框一致
         self.chat_display.setStyleSheet("""
             QTextEdit { 
                 background-color: #2b2b2b; 
-                color: #ffffff;
+                color: #e0e0e0;
                 border: 1px solid #555555;
                 padding: 5px;
             }
@@ -205,12 +205,12 @@ class MainWindow(QMainWindow):
 
         self.log_display = QTextEdit()
         self.log_display.setReadOnly(True)
-        self.log_display.setFont(QFont("Consolas", 9))
+        self.log_display.setFont(QFont("Consolas", 14))  # 字体加大到 14pt
         # 设置日志区域背景色为深灰色，与整体主题一致
         self.log_display.setStyleSheet("""
             QTextEdit { 
                 background-color: #2b2b2b; 
-                color: #ffffff;
+                color: #e0e0e0;
                 border: 1px solid #555555;
                 padding: 5px;
             }
