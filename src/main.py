@@ -308,22 +308,32 @@ class MainWindow(QMainWindow):
         self.current_worker.start()
 
     def _on_token(self, text: str):
+        """处理接收到的 token - 实时更新显示"""
         self.speed_calc.add_token()
         stats = self.speed_calc.get_current_stats()
         self.speed_label.setText(f"速度：{stats.tokens_per_second:.1f} tokens/s")
 
-        # 追加到 assistant 消息
-        cursor = self.chat_display.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        
-        # 查找或创建 assistant 块
-        if not hasattr(self, '_current_assistant_block'):
+        # 初始化或追加到当前 assistant 消息块
+        if not hasattr(self, "_current_assistant_block"):
             self._current_assistant_block = ""
-            self._append_chat("assistant", "")
         
         self._current_assistant_block += text
-        # 更新最后一条消息
-        self.history._messages[-1].content = self._current_assistant_block
+        
+        # 更新历史中的最后一条消息
+        if self.history._messages and self.history._messages[-1].role == "assistant":
+            self.history._messages[-1].content = self._current_assistant_block
+        else:
+            # 如果是第一条 assistant 消息，添加到历史
+            self.history.add_assistant_message(self._current_assistant_block, self.config.model)
+        
+        # 刷新对话显示 - 清空并重新渲染所有消息
+        self.chat_display.clear()
+        for msg in self.history.get_messages():
+            self._append_chat(msg.role, msg.content)
+        
+        # 更新状态栏显示思考过程（最后 50 个字符）
+        preview = self._current_assistant_block[-50:] if len(self._current_assistant_block) > 50 else self._current_assistant_block
+        self.status_label.setText(f"正在生成：{preview}...")
 
     def _on_chat_finished(self, content: str, error: str):
         self.current_worker = None
