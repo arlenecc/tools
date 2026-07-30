@@ -76,31 +76,44 @@ class MainWindow(QMainWindow):
         self.logger.register_callback(self._on_log_entry)
 
     def _init_ui(self):
+        """初始化 UI - 新布局：左侧配置 (1/3)，右侧上部对话，右侧下部日志"""
         self.setWindowTitle("OpenAI API 调试工具")
-        self.setMinimumSize(900, 650)
+        self.setMinimumSize(1200, 800)
 
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
+        main_layout = QHBoxLayout(central)
+        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(10, 10, 10, 10)
 
-        # 配置面板
+        # 左侧配置面板 (约 1/3 宽度)
         config_group = self._create_config_panel()
-        main_layout.addWidget(config_group)
+        config_group.setMinimumWidth(300)
+        config_group.setMaximumWidth(450)
+        main_layout.addWidget(config_group, 1)
 
-        # 分割器
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        main_layout.addWidget(splitter, 1)
+        # 右侧区域 (垂直布局：上部对话 + 下部日志)
+        right_splitter = QSplitter(Qt.Orientation.Vertical)
+        right_splitter.setStretchFactor(0, 3)  # 对话区域占 3/4
+        right_splitter.setStretchFactor(1, 1)  # 日志区域占 1/4
+        main_layout.addWidget(right_splitter, 3)
 
         # 对话区域
         chat_widget = self._create_chat_area()
-        splitter.addWidget(chat_widget)
+        right_splitter.addWidget(chat_widget)
 
         # 日志区域
         log_widget = self._create_log_area()
-        splitter.addWidget(log_widget)
+        right_splitter.addWidget(log_widget)
 
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
+        # 设置初始比例
+        QTimer.singleShot(100, lambda: self._set_splitter_sizes(right_splitter))
+
+    def _set_splitter_sizes(self, splitter: QSplitter):
+        """设置分割器初始大小"""
+        total_height = splitter.height()
+        if total_height > 0:
+            splitter.setSizes([int(total_height * 0.75), int(total_height * 0.25)])
 
     def _create_config_panel(self) -> QGroupBox:
         group = QGroupBox("服务配置")
