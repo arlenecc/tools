@@ -106,8 +106,8 @@ class APIClient:
         messages: List[Dict[str, str]],
         model: str,
         logger=None
-    ) -> Generator[Tuple[Optional[str], Optional[str]], None, None]:
-        """流式聊天完成，yield (content_chunk, error)"""
+    ) -> Generator[Tuple[Optional[str], Optional[str], Optional[str]], None, None]:
+        """流式聊天完成，yield (content_chunk, reasoning_content, error)"""
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": model,
@@ -146,14 +146,17 @@ class APIClient:
                         choice = data.get("choices", [{}])[0]
                         delta = choice.get("delta", {})
                         content = delta.get("content")
+                        reasoning_content = delta.get("reasoning_content") or delta.get("reasoning") or delta.get("thinking")
                         finish_reason = choice.get("finish_reason")
-                        if content:
+                        if logger and reasoning_content:
+                            logger.debug("思考内容", f"Field detected, len={len(reasoning_content)}")
+                        if content or reasoning_content:
                             token_count += 1
-                            yield content, None
+                            yield content, reasoning_content, None
                         elif finish_reason:
                             if logger:
                                 logger.debug("完成原因", f"finish_reason: {finish_reason}")
-                            yield None, None
+                            yield None, None, None
                     except json.JSONDecodeError as e:
                         if logger:
                             logger.warning("JSON 解析失败", str(e))
@@ -162,12 +165,12 @@ class APIClient:
             error_msg = f"请求失败：{str(e)}"
             if logger:
                 logger.error("HTTP 请求错误", error_msg)
-            yield None, error_msg
+            yield None, None, error_msg
         except Exception as e:
             error_msg = f"未知错误：{str(e)}"
             if logger:
                 logger.error("未知错误", error_msg)
-            yield None, error_msg
+            yield None, None, error_msg
 
     def close(self) -> None:
         """关闭会话"""

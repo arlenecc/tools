@@ -12,18 +12,21 @@ from .speed_calculator import SpeedCalculator
 from .logger import Logger
 
 class StreamWorker(QThread):
-    token_received = pyqtSignal(str); response_finished = pyqtSignal(); error_occurred = pyqtSignal(str); log_signal = pyqtSignal(str)
-    def __init__(self, client, messages, model):
-        super().__init__(); self.client = client; self.messages = messages; self.model = model; self._stop_flag = False
+    token_received = pyqtSignal(str); reasoning_received = pyqtSignal(str)
+    response_finished = pyqtSignal(); error_occurred = pyqtSignal(str); log_signal = pyqtSignal(str)
+    def __init__(self, client, messages, model, logger=None):
+        super().__init__(); self.client = client; self.messages = messages; self.model = model; self._stop_flag = False; self.logger = logger
     def run(self):
         try:
             self.log_signal.emit(f"[{datetime.now().strftime('%H:%M:%S')}] 开始流式请求...")
-            for content, error in self.client.chat_completion_stream(self.messages, self.model):
+            for content, reasoning, error in self.client.chat_completion_stream(self.messages, self.model, logger=self.logger):
                 if self._stop_flag: break
                 if error:
                     self.log_signal.emit(f"[{datetime.now().strftime('%H:%M:%S')}] {error}")
                     self.error_occurred.emit(error)
                     return
+                if reasoning:
+                    self.reasoning_received.emit(reasoning)
                 if content:
                     self.token_received.emit(content)
             self.log_signal.emit(f"[{datetime.now().strftime('%H:%M:%S')}] 响应结束")
@@ -40,7 +43,8 @@ class OpenAIDebugTool(QMainWindow):
         self.config_manager = ConfigManager(); self.api_client = APIClient(); self.message_history = MessageHistory()
         self.speed_calculator = SpeedCalculator(); self.logger = Logger()
         self.stream_worker = None; self.current_reply = ""; self.reply_mutex = QMutex()
-        self._msg_data = []; self._collapsed = False
+        self._msg_data = []
+        self._chat_base_html = ''; self._streaming = False; self._pending_html = ''
         self._init_ui(); self._load_config(); self._setup_connections()
 
     def _init_ui(self):
@@ -64,12 +68,6 @@ class OpenAIDebugTool(QMainWindow):
         
         # 左侧对话
         left_w = QWidget(); left_l = QVBoxLayout(left_w); left_l.setContentsMargins(0,0,0,0); left_l.setSpacing(5)
-        chat_h = QHBoxLayout()
-        chat_lbl = QLabel("对话"); chat_lbl.setStyleSheet("color:#e0e0e0;font-weight:bold;font-size:12px;")
-        self.think_btn = QPushButton("折叠思考过程"); self.think_btn.setStyleSheet("QPushButton{background:#6c757d;color:white;border:none;padding:4px 8px;border-radius:3px;font-size:11px;} QPushButton:hover{background:#5a6268;}")
-        self.think_btn.clicked.connect(self._toggle_thinking)
-        chat_h.addWidget(chat_lbl); chat_h.addStretch(); chat_h.addWidget(self.think_btn)
-        left_l.addLayout(chat_h)
         self.chat_out = QTextEdit(); self.chat_out.setReadOnly(True); self.chat_out.setFont(QFont("Consolas", 14))
         self.chat_out.setStyleSheet("QTextEdit{background:#2b2b2b;color:#e0e0e0;border:1px solid #555;border-radius:4px;padding:5px;}")
         left_l.addWidget(self.chat_out, 85)
@@ -81,7 +79,19 @@ class OpenAIDebugTool(QMainWindow):
         self.clr_btn = QPushButton("清空"); self.clr_btn.setStyleSheet("QPushButton{background:#dc3545;color:white;border:none;padding:6px 12px;border-radius:4px;font-weight:bold;}")
         self.clr_btn.clicked.connect(self._clear_chat)
         in_l.addWidget(self.in_field); in_l.addWidget(self.send_btn); in_l.addWidget(self.clr_btn)
-        left_l.addLayout(in_l, 15)
+        left_l.addLayout(in_l, 12)
+
+        # 左侧思考过程
+        think_h = QHBoxLayout()
+        think_lbl = QLabel("思考过程"); think_lbl.setStyleSheet("color:#e0e0e0;font-weight:bold;font-size:12px;")
+        think_h.addWidget(think_lbl); think_h.addStretch()
+        self.speed_lbl = QLabel(""); self.speed_lbl.setStyleSheet("color:#a8d8ea;font-size:12px;")
+        think_h.addWidget(self.speed_lbl); think_h.addStretch()
+        left_l.addLayout(think_h)
+        self.think_out = QTextEdit(); self.think_out.setReadOnly(True); self.think_out.setFont(QFont("Consolas", 11))
+        self.think_out.setStyleSheet("QTextEdit{background:#1a1a2e;color:#a8d8ea;border:1px solid #555;border-radius:4px;padding:5px;}")
+        self.think_out.setPlainText("就绪")
+        left_l.addWidget(self.think_out, 25)
 
         # 右侧日志
         right_w = QWidget(); right_l = QVBoxLayout(right_w); right_l.setContentsMargins(0,0,0,0); right_l.setSpacing(5)
@@ -95,10 +105,7 @@ class OpenAIDebugTool(QMainWindow):
 
         split.addWidget(left_w); split.addWidget(right_w); split.setStretchFactor(0, 2); split.setStretchFactor(1, 1)
 
-        # 底部状态
-        self.status_lbl = QLabel("就绪"); self.status_lbl.setStyleSheet("color:#aaa;padding:5px;background:#2b2b2b;border-radius:3px;")
-
-        main_layout.addWidget(cfg, 10); main_layout.addWidget(split, 90); main_layout.addWidget(self.status_lbl)
+        main_layout.addWidget(cfg, 8); main_layout.addWidget(split, 92)
 
     def _load_config(self):
         c = self.config_manager.load()
@@ -114,8 +121,8 @@ class OpenAIDebugTool(QMainWindow):
 
     def _get_models(self):
         url = self.url_in.text().strip(); key = self.key_in.text().strip()
-        if not url: QMessageBox.warning(self, "警告", "请填写 Base URL"); return
-        self.status_lbl.setText("获取中..."); self.get_btn.setEnabled(False)
+        if not url: QMessageBox.warning(self, "\u8b66\u544a", "\u8bf7\u586b\u5199 Base URL"); return
+        self.think_out.setPlainText("\u83b7\u53d6\u4e2d..."); self.get_btn.setEnabled(False)
         self.api_client.set_base_url(url); self.api_client.set_api_key(key)
         try:
             models, error = self.api_client.fetch_models()
@@ -126,7 +133,7 @@ class OpenAIDebugTool(QMainWindow):
             self.mod_in.clear()
             if model_ids:
                 self.mod_in.addItems(model_ids)
-            self.status_lbl.setText(f"找到 {len(model_ids)} 个模型" if model_ids else "无模型")
+            self.think_out.setPlainText(f"\u627e\u5230 {len(model_ids)} \u4e2a\u6a21\u578b" if model_ids else "\u65e0\u6a21\u578b")
         except Exception as e: QMessageBox.critical(self, "错误", str(e))
         finally: self.get_btn.setEnabled(True)
 
@@ -138,34 +145,66 @@ class OpenAIDebugTool(QMainWindow):
         
         self._append_msg("user", txt); self.in_field.clear()
         self.send_btn.setEnabled(False); self.in_field.setEnabled(False)
-        self.status_lbl.setText("思考中..."); self.current_reply = ""; self.speed_calculator.start()
+        self.think_out.setPlainText("思考中..."); self.speed_lbl.setText(""); self.current_reply = ""
+        self._pending_html = ''; self._streaming = True; self.speed_calculator.start()
+        self._has_reasoning = False; self._first_chunk = True
         self.message_history.add_message("user", txt)
         self.api_client.set_base_url(url); self.api_client.set_api_key(key)
         
-        self.stream_worker = StreamWorker(self.api_client, self.message_history.get_api_messages(), mod)
+        self.stream_worker = StreamWorker(self.api_client, self.message_history.get_api_messages(), mod, self.logger)
         self.stream_worker.token_received.connect(self._on_token)
+        self.stream_worker.reasoning_received.connect(self._on_reasoning)
         self.stream_worker.response_finished.connect(self._on_finish)
         self.stream_worker.error_occurred.connect(self._on_err)
         self.stream_worker.log_signal.connect(self._append_log)
         self.stream_worker.start()
 
+    def _on_reasoning(self, token):
+        if self._first_chunk:
+            self._has_reasoning = True; self._first_chunk = False
+            self.think_out.clear()
+        self.speed_calculator.add_token()
+        tokens = self.speed_calculator.get_current_stats().total_tokens
+        self.speed_lbl.setText(f"⚡ {tokens} tokens")
+        cur = self.think_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End); cur.insertText(token)
+        self.think_out.setTextCursor(cur); self.think_out.ensureCursorVisible()
+
     def _on_token(self, token):
+        if self._first_chunk:
+            self._first_chunk = False
+            if not self._has_reasoning:
+                self.think_out.setPlainText("就绪")
         with QMutexLocker(self.reply_mutex): self.current_reply += token
         spd = self.speed_calculator.add_token()
-        disp = self.current_reply[-50:] if len(self.current_reply)>50 else self.current_reply
-        self.status_lbl.setText(f"⚡ {spd:.1f} t/s | ...{disp}")
-        cur = self.chat_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End); cur.insertText(token)
-        self.chat_out.setTextCursor(cur); self.chat_out.ensureCursorVisible()
+        tokens = self.speed_calculator.get_current_stats().total_tokens
+        self.speed_lbl.setText(f"⚡ {spd:.1f} t/s  |  Tokens: {tokens}")
+        if not self._has_reasoning:
+            c = token.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(chr(10), '<br>')
+            self._pending_html += f'<span style="color:#e0e0e0;">{c}</span>'
+            self.chat_out.setHtml(self._chat_base_html + '<div style="margin:10px 0;"><span style="color:#00cc66;font-weight:bold;">AI:</span><br>' + self._pending_html + '</div>')
+            cur = self.chat_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End)
+            self.chat_out.setTextCursor(cur); self.chat_out.ensureCursorVisible()
 
     def _on_finish(self):
         self.send_btn.setEnabled(True); self.in_field.setEnabled(True); self.in_field.setFocus()
+        self._streaming = False
         with QMutexLocker(self.reply_mutex): final = self.current_reply
-        if final: self.message_history.add_message("assistant", final)
-        self.status_lbl.setText(f"完成 (Tokens: {self.speed_calculator.get_current_stats().total_tokens})")
+        if final:
+            self.message_history.add_message("assistant", final)
+            self._append_msg("assistant", final)
+            if not self._has_reasoning:
+                self.think_out.setPlainText(final)
+        total = self.speed_calculator.get_current_stats().total_tokens
+        self.speed_lbl.setText(f"✓ 完成  |  Tokens: {total}")
+        if self._has_reasoning:
+            cur = self.think_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End)
+            cur.insertText(f"\n\n--- 完成 (Tokens: {total}) ---")
+            self.think_out.setTextCursor(cur); self.think_out.ensureCursorVisible()
         self.speed_calculator.reset()
 
     def _on_err(self, msg):
-        self.send_btn.setEnabled(True); self.in_field.setEnabled(True); self.status_lbl.setText("错误")
+        self.send_btn.setEnabled(True); self.in_field.setEnabled(True)
+        self.think_out.setPlainText("就绪"); self.speed_lbl.setText("")
         QMessageBox.critical(self, "错误", msg)
 
     def _append_msg(self, role, content):
@@ -174,33 +213,28 @@ class OpenAIDebugTool(QMainWindow):
 
     def _clear_chat(self):
         self.chat_out.clear(); self.message_history.clear()
-        self._msg_data.clear(); self.status_lbl.setText("已清空")
+        self._msg_data.clear(); self._chat_base_html = ''; self._streaming = False; self._pending_html = ''
+        self.think_out.setPlainText("已清空")
 
     def _clear_logs(self): self.log_out.clear()
 
+    def _render_msg(self, role, content):
+        color = "#4da6ff" if role == "user" else "#00cc66"
+        name = "User" if role == "user" else "AI"
+        c = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(chr(10), '<br>')
+        return f'<div style="margin:10px 0;"><span style="color:{color};font-weight:bold;">{name}:</span><br><span style="color:#e0e0e0;">{c}</span></div>'
+
     def _rebuild_chat(self):
-        html = ''
-        for msg in self._msg_data:
-            role, content = msg['role'], msg['content']
-            color = "#4da6ff" if role == "user" else "#00cc66"
-            name = "User" if role == "user" else "AI"
-            c = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(chr(10), '<br>')
-            html += f'<div style="margin:10px 0;"><span style="color:{color};font-weight:bold;">{name}:</span><br>'
-            if role == "assistant" and self._collapsed:
-                html += '<span style="color:#888;font-style:italic;">[思考过程已折叠 - 点击按钮展开]</span>'
-            else:
-                html += f'<span style="color:#e0e0e0;">{c}</span>'
-            html += '</div>'
+        msgs = self._msg_data[:-1] if self._streaming and self._msg_data else self._msg_data
+        self._chat_base_html = ''.join(self._render_msg(m['role'], m['content']) for m in msgs)
+        html = self._chat_base_html
+        if self._streaming and self._pending_html:
+            html += '<div style="margin:10px 0;"><span style="color:#00cc66;font-weight:bold;">AI:</span><br>' + self._pending_html + '</div>'
         self.chat_out.setHtml(html)
         cur = self.chat_out.textCursor()
         cur.movePosition(QTextCursor.MoveOperation.End)
         self.chat_out.setTextCursor(cur)
         self.chat_out.ensureCursorVisible()
-
-    def _toggle_thinking(self):
-        self._collapsed = not self._collapsed
-        self.think_btn.setText("展开思考过程" if self._collapsed else "折叠思考过程")
-        self._rebuild_chat()
 
     def closeEvent(self, event):
         if self.stream_worker and self.stream_worker.isRunning(): self.stream_worker.stop(); self.stream_worker.wait()
