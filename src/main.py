@@ -1,432 +1,172 @@
-"""OpenAI 调试工具 - PyQt6 GUI"""
-import sys
-from typing import Optional, List
+import sys, json, time, threading
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit, QPushButton, QLabel, QComboBox, QSplitter, QMessageBox, QGroupBox)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QMetaObject, QMutex, QMutexLocker
+from PyQt6.QtGui import QFont, QColor, QTextCursor, QPalette
 
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLineEdit, QPushButton, QLabel, QComboBox,
-    QSplitter, QGroupBox, QFormLayout, QMessageBox, QFrame,
-    QScrollArea
-)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QTextCursor
+try:
+    from .config_manager import ConfigManager; from .api_client import APIClient; from .message_history import MessageHistory; from .speed_calculator import SpeedCalculator; from .logger import Logger
+except ImportError:
+    from config_manager import ConfigManager; from api_client import APIClient; from message_history import MessageHistory; from speed_calculator import SpeedCalculator; from logger import Logger
 
-from .config_manager import ConfigManager, Config
-from .api_client import APIClient, ModelInfo
-from .message_history import MessageHistory
-from .speed_calculator import SpeedCalculator
-from .logger import Logger
-from .log_entry import LogEntry
-
-
-class ModelFetchWorker(QThread):
-    """模型获取工作线程"""
-    finished = pyqtSignal(list, str)  # models, error
-
-    def __init__(self, client: APIClient):
-        super().__init__()
-        self.client = client
-
+class StreamWorker(QThread):
+    token_received = pyqtSignal(str); response_finished = pyqtSignal(); error_occurred = pyqtSignal(str); log_signal = pyqtSignal(str)
+    def __init__(self, client, messages, model):
+        super().__init__(); self.client = client; self.messages = messages; self.model = model; self._stop_flag = False
     def run(self):
-        models, error = self.client.fetch_models()
-        self.finished.emit(models, error or "")
+        try:
+            self.log_signal.emit(f"[{datetime.now().strftime('%H:%M:%S')}] 开始流式请求...")
+            for chunk in self.client.send_stream_request(self.messages, self.model):
+                if self._stop_flag: break
+                if chunk: self.token_received.emit(chunk)
+            self.log_signal.emit(f"[{datetime.now().strftime('%H:%M:%S')}] 响应结束"); self.response_finished.emit()
+        except Exception as e:
+            err = f"错误: {str(e)}"; self.log_signal.emit(f"[{datetime.now().strftime('%H:%M:%S')}] {err}"); self.error_occurred.emit(err)
+    def stop(self): self._stop_flag = True
 
-
-class ChatWorker(QThread):
-    """聊天工作线程"""
-    token_received = pyqtSignal(str)
-    finished = pyqtSignal(str, str)  # full_content, error
-    speed_update = pyqtSignal(float)
-
-    def __init__(self, client: APIClient, messages: List, model: str, logger=None):
-        super().__init__()
-        self.client = client
-        self.messages = messages
-        self.model = model
-        self.logger = logger
-        self._full_content = ""
-
-    def run(self):
-        self._full_content = ""
-        for content, error in self.client.chat_completion_stream(self.messages, self.model, self.logger):
-            if error:
-                self.finished.emit("", error)
-                return
-            if content:
-                self._full_content += content
-                self.token_received.emit(content)
-        self.finished.emit(self._full_content, "")
-
-
-class MainWindow(QMainWindow):
-    """主窗口"""
-
+class OpenAIDebugTool(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.config_manager = ConfigManager()
-        self.config = self.config_manager.config
-        self.client = APIClient(self.config.base_url, self.config.api_key)
-        self.history = MessageHistory()
-        self.logger = Logger()
-        self.speed_calc = SpeedCalculator()
-        self.current_worker: Optional[ChatWorker] = None
-
-        self._init_ui()
-        self._load_config_to_ui()
-        self.logger.register_callback(self._on_log_entry)
+        self.config_manager = ConfigManager(); self.api_client = APIClient(); self.message_history = MessageHistory()
+        self.speed_calculator = SpeedCalculator(); self.logger = Logger()
+        self.stream_worker = None; self.current_reply = ""; self.reply_mutex = QMutex()
+        self._init_ui(); self._load_config(); self._setup_connections()
 
     def _init_ui(self):
-        """初始化 UI - 新布局：顶部配置 (1/5)，左侧对话 (2/3)，右侧日志 (1/3)"""
-        self.setWindowTitle("OpenAI API 调试工具")
-        self.setMinimumSize(1400, 900)
-
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-
-        # 顶部配置面板 (约 1/5 高度，横向占满)
-        config_group = self._create_config_panel()
-        config_group.setMaximumHeight(180)
-        main_layout.addWidget(config_group, 0)
-
-        # 下部区域 (水平分割：左侧对话 + 右侧日志)
-        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
-        bottom_splitter.setStretchFactor(0, 2)  # 对话区域占 2/3
-        bottom_splitter.setStretchFactor(1, 1)  # 日志区域占 1/3
-        main_layout.addWidget(bottom_splitter, 1)
-
-        # 左侧对话区域
-        chat_widget = self._create_chat_area()
-        bottom_splitter.addWidget(chat_widget)
-
-        # 右侧日志区域
-        log_widget = self._create_log_area()
-        bottom_splitter.addWidget(log_widget)
-
-        # 设置初始比例
-        QTimer.singleShot(100, lambda: self._set_splitter_sizes(bottom_splitter))
-
-    def _set_splitter_sizes(self, splitter: QSplitter):
-        """设置分割器初始大小"""
-        total_width = splitter.width()
-        if total_width > 0:
-            splitter.setSizes([int(total_width * 0.67), int(total_width * 0.33)])
-
-    def _create_config_panel(self) -> QGroupBox:
-        group = QGroupBox("服务配置")
-        layout = QFormLayout()
-
-        # Base URL
-        self.url_input = QLineEdit()
-        self.url_input.setPlaceholderText("http://localhost:11434/v1")
-        layout.addRow("Base URL:", self.url_input)
-
-        # API Key
-        self.key_input = QLineEdit()
-        self.key_input.setPlaceholderText("可选")
-        self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addRow("API Key:", self.key_input)
-
-        # 模型选择
-        model_layout = QHBoxLayout()
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
-        self.model_combo.setPlaceholderText("选择或输入模型名称")
-        model_layout.addWidget(self.model_combo, 1)
-
-        self.fetch_btn = QPushButton("获取模型列表")
-        self.fetch_btn.clicked.connect(self._fetch_models)
-        model_layout.addWidget(self.fetch_btn)
-        layout.addRow("模型:", model_layout)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_chat_area(self) -> QWidget:
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-
-        # 消息显示区
-        self.chat_display = QTextEdit()
-        self.chat_display.setReadOnly(True)
-        self.chat_display.setFont(QFont("Consolas", 14))  # 字体加大到 14pt
-        # 设置对话区域背景为深灰色，与输入框一致
-        self.chat_display.setStyleSheet("""
-            QTextEdit { 
-                background-color: #2b2b2b; 
-                color: #e0e0e0;
-                border: 1px solid #555555;
-                padding: 5px;
-            }
-        """)
-        layout.addWidget(self.chat_display)
-
-        # 状态栏
-        status_layout = QHBoxLayout()
-        self.status_label = QLabel("就绪")
-        self.speed_label = QLabel("速度：0.0 tokens/s")
-        status_layout.addWidget(self.status_label)
-        status_layout.addStretch()
-        status_layout.addWidget(self.speed_label)
-        layout.addLayout(status_layout)
-
-        # 输入区
-        input_layout = QHBoxLayout()
-        self.input_field = QTextEdit()
-        self.input_field.setMaximumHeight(100)
-        self.input_field.setPlaceholderText("输入消息... (Ctrl+Enter 发送)")
-        self.input_field.setStyleSheet("""
-            QTextEdit { 
-                background-color: #2b2b2b; 
-                color: #ffffff;
-                border: 1px solid #555555;
-                padding: 5px;
-            }
-        """)
-        self.input_field.installEventFilter(self)
-        input_layout.addWidget(self.input_field, 1)
-
-        send_btn = QPushButton("发送")
-        send_btn.clicked.connect(self._send_message)
-        input_layout.addWidget(send_btn)
-
-        clear_btn = QPushButton("清空对话")
-        clear_btn.clicked.connect(self._clear_chat)
-        input_layout.addWidget(clear_btn)
-
-        layout.addLayout(input_layout)
-        return widget
-
-    def _create_log_area(self) -> QGroupBox:
-        group = QGroupBox("调试日志")
-        layout = QVBoxLayout()
-
-        self.log_display = QTextEdit()
-        self.log_display.setReadOnly(True)
-        self.log_display.setFont(QFont("Consolas", 14))  # 字体加大到 14pt
-        # 设置日志区域背景色为深灰色，与整体主题一致
-        self.log_display.setStyleSheet("""
-            QTextEdit { 
-                background-color: #2b2b2b; 
-                color: #e0e0e0;
-                border: 1px solid #555555;
-                padding: 5px;
-            }
-        """)
-        layout.addWidget(self.log_display)
-
-        clear_log_btn = QPushButton("清空日志")
-        clear_log_btn.clicked.connect(self._clear_log)
-        layout.addWidget(clear_log_btn)
-
-        group.setLayout(layout)
-        return group
-
-    def _load_config_to_ui(self):
-        self.url_input.setText(self.config.base_url)
-        self.key_input.setText(self.config.api_key)
-        if self.config.model:
-            self.model_combo.setCurrentText(self.config.model)
-
-    def _save_config_from_ui(self):
-        self.config.base_url = self.url_input.text().strip()
-        self.config.api_key = self.key_input.text().strip()
-        self.config.model = self.model_combo.currentText().strip()
-        self.config_manager.save(self.config)
-
-    def _fetch_models(self):
-        self._save_config_from_ui()
-        self.client.set_base_url(self.config.base_url)
-        self.client.set_api_key(self.config.api_key)
-
-        self.fetch_btn.setEnabled(False)
-        self.fetch_btn.setText("获取中...")
-        self.logger.info("正在获取模型列表...", f"URL: {self.config.base_url}/models")
-
-        self.worker = ModelFetchWorker(self.client)
-        self.worker.finished.connect(self._on_models_fetched)
-        self.worker.start()
-
-    def _on_models_fetched(self, models: List[ModelInfo], error: str):
-        self.fetch_btn.setEnabled(True)
-        self.fetch_btn.setText("获取模型列表")
-
-        if error:
-            self.logger.error("获取模型列表失败", error)
-            QMessageBox.warning(self, "错误", f"获取模型列表失败:\n{error}")
-            return
-
-        self.model_combo.clear()
-        if not models:
-            self.logger.warning("未找到任何模型")
-            self.model_combo.addItem("无可用模型")
-            return
-
-        self.logger.info(f"找到 {len(models)} 个模型")
-        for model in models:
-            self.model_combo.addItem(model.id)
-
-        # 如果有之前选择的模型，尝试选中
-        if self.config.model:
-            idx = self.model_combo.findText(self.config.model)
-            if idx >= 0:
-                self.model_combo.setCurrentIndex(idx)
-
-    def _send_message(self):
-        user_text = self.input_field.toPlainText().strip()
-        if not user_text:
-            return
-
-        if self.current_worker and self.current_worker.isRunning():
-            return
-
-        self._save_config_from_ui()
-        self.client.set_base_url(self.config.base_url)
-        self.client.set_api_key(self.config.api_key)
-
-        model = self.model_combo.currentText().strip()
-        if not model or model == "无可用模型":
-            QMessageBox.warning(self, "警告", "请先选择或输入模型名称")
-            return
-
-        # 添加用户消息
-        self.history.add_user_message(user_text)
-        self._append_chat("user", user_text)
-        self.input_field.clear()
-
-        self.status_label.setText("正在思考...")
-        self.speed_calc.reset()
-        self.speed_calc.start()
-        self.logger.info(f"发送请求到模型: {model}", f"消息数: {len(self.history)}")
-
-        messages = self.history.get_api_messages()
-        self.current_worker = ChatWorker(self.client, messages, model, self.logger)
-        self.current_worker.token_received.connect(self._on_token)
-        self.current_worker.finished.connect(self._on_chat_finished)
-        self.current_worker.start()
-
-    def _on_token(self, text: str):
-        """处理接收到的 token - 实时更新显示"""
-        self.speed_calc.add_token()
-        stats = self.speed_calc.get_current_stats()
-        self.speed_label.setText(f"速度：{stats.tokens_per_second:.1f} tokens/s")
-
-        # 初始化或追加到当前 assistant 消息块
-        if not hasattr(self, "_current_assistant_block"):
-            self._current_assistant_block = ""
+        self.setWindowTitle("OpenAI 调试工具 (修复版)"); self.setGeometry(100, 100, 1400, 900)
+        main_widget = QWidget(); self.setCentralWidget(main_widget); main_layout = QVBoxLayout(main_widget); main_layout.setSpacing(10); main_layout.setContentsMargins(10,10,10,10)
         
-        self._current_assistant_block += text
-        
-        # 更新历史中的最后一条消息
-        if self.history._messages and self.history._messages[-1].role == "assistant":
-            self.history._messages[-1].content = self._current_assistant_block
-        else:
-            # 如果是第一条 assistant 消息，添加到历史
-            self.history.add_assistant_message(self._current_assistant_block, self.config.model)
-        
-        # 直接追加到对话显示，避免清空重绘导致的闪烁和性能问题
-        cursor = self.chat_display.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        
-        # 如果是第一条 token，需要先添加角色标签
-        if len(self._current_assistant_block) == len(text):
-            # 这是第一条 token，需要插入角色标签
-            cursor.insertHtml(f'<div style="background-color:#3a3a3a;padding:8px;margin:5px 0;border-radius:5px;"><span style="color:#4CAF50;font-weight:bold;">AI:</span> <span style="color:#e0e0e0;">{text}</span></div>')
-        else:
-            # 后续 token 直接追加到最后一个 div 内
-            # 移动光标到最后一个 div 的末尾前
-            cursor.setPosition(cursor.position() - 11)  # 跳过 "</div>"
-            cursor.insertText(text)
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-        
-        self.chat_display.setTextCursor(cursor)
-        self.chat_display.ensureCursorVisible()
-        
-        # 更新状态栏显示思考过程（最后 50 个字符）
-        preview = self._current_assistant_block[-50:] if len(self._current_assistant_block) > 50 else self._current_assistant_block
-        self.status_label.setText(f"正在生成：{preview}...")
+        # 顶部配置
+        cfg = QGroupBox("配置"); cfg.setStyleSheet("QGroupBox{color:#e0e0e0;border:1px solid #555;border-radius:5px;margin-top:10px;padding-top:10px;font-weight:bold;} QGroupBox::title{subcontrol-origin:margin;left:10px;padding:0 5px;}")
+        cfg_l = QHBoxLayout(cfg); cfg_l.setSpacing(10)
+        self.url_in = QLineEdit(); self.url_in.setPlaceholderText("Base URL"); self.url_in.setMinimumWidth(200)
+        self.key_in = QLineEdit(); self.key_in.setPlaceholderText("API Key"); self.key_in.setEchoMode(QLineEdit.EchoMode.Password); self.key_in.setMinimumWidth(200)
+        self.mod_in = QComboBox(); self.mod_in.setEditable(True); self.mod_in.setPlaceholderText("模型"); self.mod_in.setMinimumWidth(150)
+        self.get_btn = QPushButton("获取模型"); self.get_btn.setStyleSheet("QPushButton{background:#3a7bd5;color:white;border:none;padding:6px 12px;border-radius:4px;font-weight:bold;} QPushButton:hover{background:#2c5aa0;}")
+        self.send_btn = QPushButton("发送"); self.send_btn.setStyleSheet("QPushButton{background:#28a745;color:white;border:none;padding:6px 15px;border-radius:4px;font-weight:bold;font-size:14px;} QPushButton:disabled{background:#555;color:#888;}")
+        cfg_l.addWidget(QLabel("URL:")); cfg_l.addWidget(self.url_in)
+        cfg_l.addWidget(QLabel("Key:")); cfg_l.addWidget(self.key_in)
+        cfg_l.addWidget(QLabel("Model:")); cfg_l.addWidget(self.mod_in)
+        cfg_l.addWidget(self.get_btn); cfg_l.addWidget(self.send_btn); cfg_l.addStretch()
 
-    def _on_chat_finished(self, content: str, error: str):
-        self.current_worker = None
-        self.speed_calc.stop()
+        # 中间分割
+        split = QSplitter(Qt.Orientation.Horizontal); split.setHandleWidth(2); split.setStyleSheet("QSplitter::handle{background:#555;}")
         
-        if error:
-            self.logger.error("聊天请求失败", error)
-            self._append_chat("system", f"错误：{error}")
-            self.status_label.setText("错误")
-        else:
-            if content:
-                if not hasattr(self, '_current_assistant_block') or not self._current_assistant_block:
-                    self.history.add_assistant_message(content, self.config.model)
-                    self._append_chat("assistant", content)
-                else:
-                    self.history._messages[-1].content = self._current_assistant_block
-                self.logger.info("收到响应", f"长度：{len(content)}")
-            self.status_label.setText("就绪")
+        # 左侧对话
+        left_w = QWidget(); left_l = QVBoxLayout(left_w); left_l.setContentsMargins(0,0,0,0); left_l.setSpacing(5)
+        self.chat_out = QTextEdit(); self.chat_out.setReadOnly(True); self.chat_out.setFont(QFont("Consolas", 14))
+        self.chat_out.setStyleSheet("QTextEdit{background:#2b2b2b;color:#e0e0e0;border:1px solid #555;border-radius:4px;padding:5px;}")
+        in_l = QHBoxLayout(); self.in_field = QLineEdit(); self.in_field.setPlaceholderText("输入消息..."); self.in_field.setFont(QFont("Arial", 14))
+        self.in_field.setStyleSheet("QLineEdit{background:#2b2b2b;color:#e0e0e0;border:1px solid #555;border-radius:4px;padding:8px;}")
+        self.in_field.returnPressed.connect(self._on_send)
+        self.clr_btn = QPushButton("清空"); self.clr_btn.setStyleSheet("QPushButton{background:#dc3545;color:white;border:none;padding:6px 12px;border-radius:4px;font-weight:bold;}")
+        self.clr_btn.clicked.connect(self._clear_chat)
+        in_l.addWidget(self.in_field); in_l.addWidget(self.clr_btn)
+        left_l.addWidget(self.chat_out, 85); left_l.addLayout(in_l, 15)
+
+        # 右侧日志
+        right_w = QWidget(); right_l = QVBoxLayout(right_w); right_l.setContentsMargins(0,0,0,0); right_l.setSpacing(5)
+        log_h = QHBoxLayout(); log_lbl = QLabel("实时日志"); log_lbl.setStyleSheet("color:#e0e0e0;font-weight:bold;font-size:12px;")
+        self.clr_log_btn = QPushButton("清空"); self.clr_log_btn.setStyleSheet("QPushButton{background:#6c757d;color:white;border:none;padding:4px 8px;border-radius:3px;font-size:11px;}")
+        self.clr_log_btn.clicked.connect(self._clear_logs)
+        log_h.addWidget(log_lbl); log_h.addStretch(); log_h.addWidget(self.clr_log_btn)
+        self.log_out = QTextEdit(); self.log_out.setReadOnly(True); self.log_out.setFont(QFont("Consolas", 14))
+        self.log_out.setStyleSheet("QTextEdit{background:#1e1e1e;color:#00ff00;border:1px solid #555;border-radius:4px;padding:5px;}")
+        right_l.addLayout(log_h); right_l.addWidget(self.log_out)
+
+        split.addWidget(left_w); split.addWidget(right_w); split.setStretchFactor(0, 2); split.setStretchFactor(1, 1)
+
+        # 底部状态
+        self.status_lbl = QLabel("就绪"); self.status_lbl.setStyleSheet("color:#aaa;padding:5px;background:#2b2b2b;border-radius:3px;")
+
+        main_layout.addWidget(cfg, 20); main_layout.addWidget(split, 80); main_layout.addWidget(self.status_lbl)
+
+    def _load_config(self):
+        c = self.config_manager.load_config()
+        self.url_in.setText(c.get('base_url','')); self.key_in.setText(c.get('api_key','')); self.mod_in.setCurrentText(c.get('model',''))
+
+    def _setup_connections(self):
+        self.get_btn.clicked.connect(self._get_models); self.send_btn.clicked.connect(self._on_send)
+        self.logger.log_signal.connect(self._append_log)
+
+    def _append_log(self, msg):
+        cur = self.log_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End); cur.insertText(msg+"\n")
+        self.log_out.setTextCursor(cur); self.log_out.ensureCursorVisible()
+
+    def _get_models(self):
+        url = self.url_in.text().strip(); key = self.key_in.text().strip()
+        if not url: QMessageBox.warning(self, "警告", "请填写 Base URL"); return
+        self.status_lbl.setText("获取中..."); self.get_btn.setEnabled(False)
+        try:
+            models = self.api_client.list_models(url, key)
+            self.mod_in.clear(); self.mod_in.addItems(models) if models else None
+            self.status_lbl.setText(f"找到 {len(models)} 个模型" if models else "无模型")
+        except Exception as e: QMessageBox.critical(self, "错误", str(e))
+        finally: self.get_btn.setEnabled(True)
+
+    def _on_send(self):
+        txt = self.in_field.text().strip()
+        if not txt: return
+        url = self.url_in.text().strip(); key = self.key_in.text().strip(); mod = self.mod_in.currentText().strip()
+        if not url or not key or not mod: QMessageBox.warning(self, "警告", "请填写完整配置"); return
         
-        stats = self.speed_calc.stop()
-        self.speed_label.setText(f"速度：{stats.tokens_per_second:.1f} tokens/s (共 {stats.total_tokens} tokens)")
-        self._current_assistant_block = None
-
-    def _append_chat(self, role: str, content: str):
-        color_map = {"user": "#0066cc", "assistant": "#339933", "system": "#cc3300"}
-        name_map = {"user": "👤 用户", "assistant": "🤖 AI", "system": "⚠️ 系统"}
-        color = color_map.get(role, "#666666")
-        name = name_map.get(role, role)
-
-        html = f'<div style="margin: 8px 0;"><b style="color: {color};">{name}</b><br/>{content.replace(chr(10), "<br/>")}</div>'
-        self.chat_display.append(html)
-        self.chat_display.verticalScrollBar().setValue(
-            self.chat_display.verticalScrollBar().maximum()
-        )
-
-    def _clear_chat(self):
-        self.history.clear()
-        self.chat_display.clear()
-        self.status_label.setText("已清空")
-        self.speed_label.setText("速度：0.0 tokens/s")
-        self.logger.info("对话历史已清空")
-        self._current_assistant_block = None
-
-    def _on_log_entry(self, entry: LogEntry):
-        time_str = entry.timestamp.strftime("%H:%M:%S")
-        self.log_display.append(f"[{time_str}] [{entry.level}] {entry.message}")
-        if entry.details:
-            self.log_display.append(f"  → {entry.details}")
-        self.log_display.verticalScrollBar().setValue(
-            self.log_display.verticalScrollBar().maximum()
-        )
-
-    def _clear_log(self):
-        self.logger.clear()
-        self.log_display.clear()
-
-    def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
-        from PyQt6.QtGui import QKeyEvent
+        self._append_msg("user", txt); self.in_field.clear()
+        self.send_btn.setEnabled(False); self.in_field.setEnabled(False)
+        self.status_lbl.setText("思考中..."); self.current_reply = ""; self.speed_calculator.reset()
+        self.message_history.add_message("user", txt)
+        self.api_client.set_auth(url, key)
         
-        if obj == self.input_field and event.type() == QEvent.Type.KeyPress:
-            key_event = event
-            if key_event.key() == Qt.Key.Key_Return and key_event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-                self._send_message()
-                return True
-        return super().eventFilter(obj, event)
+        self.stream_worker = StreamWorker(self.api_client, self.message_history.get_messages(), mod)
+        self.stream_worker.token_received.connect(self._on_token)
+        self.stream_worker.response_finished.connect(self._on_finish)
+        self.stream_worker.error_occurred.connect(self._on_err)
+        self.stream_worker.log_signal.connect(self._append_log)
+        self.stream_worker.start()
+
+    def _on_token(self, token):
+        with QMutexLocker(self.reply_mutex): self.current_reply += token
+        spd = self.speed_calculator.add_token()
+        disp = self.current_reply[-50:] if len(self.current_reply)>50 else self.current_reply
+        self.status_lbl.setText(f"⚡ {spd:.1f} t/s | ...{disp}")
+        cur = self.chat_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End); cur.insertText(token)
+        self.chat_out.setTextCursor(cur); self.chat_out.ensureCursorVisible()
+
+    def _on_finish(self):
+        self.send_btn.setEnabled(True); self.in_field.setEnabled(True); self.in_field.setFocus()
+        with QMutexLocker(self.reply_mutex): final = self.current_reply
+        if final: self.message_history.add_message("assistant", final)
+        self.status_lbl.setText(f"完成 (Tokens: {self.speed_calculator.get_total_tokens()})")
+        self.speed_calculator.reset()
+
+    def _on_err(self, msg):
+        self.send_btn.setEnabled(True); self.in_field.setEnabled(True); self.status_lbl.setText("错误")
+        QMessageBox.critical(self, "错误", msg)
+
+    def _append_msg(self, role, content):
+        color = "#4da6ff" if role=="user" else "#00cc66"; name = "User" if role=="user" else "AI"
+        html = f'<div style="margin:10px 0;"><span style="color:{color};font-weight:bold;">{name}:</span><br><span style="color:#e0e0e0;">{content.replace(chr(10),"<br>")}</span></div><hr style="border:0;border-top:1px solid #444;">'
+        cur = self.chat_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End); cur.insertHtml(html)
+        self.chat_out.setTextCursor(cur); self.chat_out.ensureCursorVisible()
+
+    def _clear_chat(self): self.chat_out.clear(); self.message_history.clear(); self.status_lbl.setText("已清空")
+    def _clear_logs(self): self.log_out.clear()
 
     def closeEvent(self, event):
-        self._save_config_from_ui()
-        self.client.close()
+        if self.stream_worker and self.stream_worker.isRunning(): self.stream_worker.stop(); self.stream_worker.wait()
+        self.config_manager.save_config({'base_url':self.url_in.text(),'api_key':self.key_in.text(),'model':self.mod_in.currentText()})
         event.accept()
 
-
 def main():
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+    app = QApplication(sys.argv); app.setStyle("Fusion")
+    pal = QPalette()
+    pal.setColor(QPalette.ColorRole.Window, QColor(53,53,53)); pal.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
+    pal.setColor(QPalette.ColorRole.Base, QColor(25,25,25)); pal.setColor(QPalette.ColorRole.AlternateBase, QColor(53,53,53))
+    pal.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white); pal.setColor(QPalette.ColorRole.Button, QColor(53,53,53))
+    pal.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white); pal.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.black)
+    pal.setColor(QPalette.ColorRole.Link, QColor(42,130,218)); pal.setColor(QPalette.ColorRole.Highlight, QColor(42,130,218))
+    pal.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
+    app.setPalette(pal)
+    win = OpenAIDebugTool(); win.show(); sys.exit(app.exec())
 
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
