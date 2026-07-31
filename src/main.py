@@ -178,12 +178,11 @@ class OpenAIDebugTool(QMainWindow):
         spd = self.speed_calculator.add_token()
         tokens = self.speed_calculator.get_current_stats().total_tokens
         self.speed_lbl.setText(f"⚡ {spd:.1f} t/s  |  Tokens: {tokens}")
-        if not self._has_reasoning:
-            c = token.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(chr(10), '<br>')
-            self._pending_html += f'<span style="color:#e0e0e0;">{c}</span>'
-            self.chat_out.setHtml(self._chat_base_html + '<div style="margin:10px 0;"><span style="color:#00cc66;font-weight:bold;">AI:</span><br>' + self._pending_html + '</div>')
-            cur = self.chat_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End)
-            self.chat_out.setTextCursor(cur); self.chat_out.ensureCursorVisible()
+        c = token.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace(chr(10), '<br>')
+        self._pending_html += f'<span style="color:#e0e0e0;">{c}</span>'
+        self.chat_out.setHtml(self._chat_base_html + '<div style="margin:10px 0;"><span style="color:#00cc66;font-weight:bold;">AI:</span><br>' + self._pending_html + '</div>')
+        cur = self.chat_out.textCursor(); cur.movePosition(QTextCursor.MoveOperation.End)
+        self.chat_out.setTextCursor(cur); self.chat_out.ensureCursorVisible()
 
     def _on_finish(self):
         self.send_btn.setEnabled(True); self.in_field.setEnabled(True); self.in_field.setFocus()
